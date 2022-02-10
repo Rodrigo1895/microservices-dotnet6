@@ -1,13 +1,10 @@
-﻿using AutoMapper;
-using GeekShopping.CartAPI.Config;
-using GeekShopping.CartAPI.Model.Context;
-using GeekShopping.CartAPI.RabbitMQSender;
-using GeekShopping.CartAPI.Repository;
-using Microsoft.EntityFrameworkCore;
+﻿using GeekShopping.PaymentAPI.MessageConsumer;
+using GeekShopping.PaymentAPI.RabbitMQSender;
+using GeekShopping.PaymentProcessor;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
-namespace GeekShopping.CartAPI
+namespace GeekShopping.PaymentAPI
 {
     public class Startup : IStartup
     {
@@ -15,34 +12,22 @@ namespace GeekShopping.CartAPI
         {
             Configuration = configuration;
         }
+
         public IConfiguration Configuration { get; }
 
+        // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
-            var connection = Configuration["PgSQLConnection:PgSQLConnectionString"];
-            services.AddDbContext<PgSQLContext>(options => {
-                options.UseNpgsql(connection);
-            });
-
-            IMapper mapper = MappingConfig.RegisterMaps().CreateMapper();
-            services.AddSingleton(mapper);
-            services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
-
-            services.AddScoped<ICartRepository, CartRepository>();
-            services.AddScoped<ICouponRepository, CouponRepository>();
-
+            services.AddSingleton<IProcessPayment, ProcessPayment>();
             services.AddSingleton<IRabbitMQMessageSender, RabbitMQMessageSender>();
-
+            services.AddHostedService<RabbitMQPaymentConsumer>();
             services.AddControllers();
-
-            services.AddHttpClient<ICouponRepository, CouponRepository>(s => s.BaseAddress = 
-                new Uri(Configuration["ServiceUrls:CouponAPI"]));
 
             services.AddAuthentication("Bearer")
                 .AddJwtBearer("Bearer", options =>
                 {
                     options.Authority = "https://localhost:4435/";
-                    options.TokenValidationParameters = new TokenValidationParameters()
+                    options.TokenValidationParameters = new TokenValidationParameters
                     {
                         ValidateAudience = false
                     };
@@ -57,13 +42,10 @@ namespace GeekShopping.CartAPI
                 });
             });
 
-            // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
-            services.AddEndpointsApiExplorer();
             services.AddSwaggerGen(c =>
             {
-                c.SwaggerDoc("v1", new OpenApiInfo { Title = "GeekShopping.CartAPI", Version = "v1" });
-                c.EnableAnnotations();
-                c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme()
+                c.SwaggerDoc("v1", new OpenApiInfo { Title = "GeekShopping.PaymentAPI", Version = "v1" });
+                c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
                 {
                     Description = @"Enter 'Bearer' [space] and your token!",
                     Name = "Authorization",
@@ -72,40 +54,45 @@ namespace GeekShopping.CartAPI
                     Scheme = "Bearer"
                 });
 
-                c.AddSecurityRequirement(new OpenApiSecurityRequirement()
-                {
+                c.AddSecurityRequirement(new OpenApiSecurityRequirement {
                     {
-                        new OpenApiSecurityScheme()
+                        new OpenApiSecurityScheme
                         {
-                            Reference = new OpenApiReference()
+                            Reference = new OpenApiReference
                             {
                                 Type = ReferenceType.SecurityScheme,
                                 Id = "Bearer"
                             },
                             Scheme = "oauth2",
                             Name = "Bearer",
-                            In = ParameterLocation.Header
+                            In= ParameterLocation.Header
                         },
-                        new List<string>()
+                        new List<string> ()
                     }
                 });
             });
         }
 
-        public void Configure(WebApplication app, IWebHostEnvironment environment)
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(WebApplication app, IWebHostEnvironment env)
         {
-            if (app.Environment.IsDevelopment())
+            if (env.IsDevelopment())
             {
+                app.UseDeveloperExceptionPage();
                 app.UseSwagger();
-                app.UseSwaggerUI();
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "GeekShopping.PaymentAPI v1"));
             }
 
             app.UseHttpsRedirection();
 
+            app.UseRouting();
             app.UseAuthentication();
             app.UseAuthorization();
 
-            app.MapControllers();
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllers();
+            });
         }
     }
 

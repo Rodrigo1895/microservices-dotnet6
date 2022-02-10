@@ -1,13 +1,12 @@
-﻿using AutoMapper;
-using GeekShopping.CartAPI.Config;
-using GeekShopping.CartAPI.Model.Context;
-using GeekShopping.CartAPI.RabbitMQSender;
-using GeekShopping.CartAPI.Repository;
+﻿using GeekShopping.OrderAPI.MessageConsumer;
+using GeekShopping.OrderAPI.Model.Context;
+using GeekShopping.OrderAPI.RabbitMQSender;
+using GeekShopping.OrderAPI.Repository;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 
-namespace GeekShopping.CartAPI
+namespace GeekShopping.OrderAPI
 {
     public class Startup : IStartup
     {
@@ -15,8 +14,10 @@ namespace GeekShopping.CartAPI
         {
             Configuration = configuration;
         }
+
         public IConfiguration Configuration { get; }
 
+        // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
             var connection = Configuration["PgSQLConnection:PgSQLConnectionString"];
@@ -24,19 +25,18 @@ namespace GeekShopping.CartAPI
                 options.UseNpgsql(connection);
             });
 
-            IMapper mapper = MappingConfig.RegisterMaps().CreateMapper();
-            services.AddSingleton(mapper);
-            services.AddAutoMapper(AppDomain.CurrentDomain.GetAssemblies());
+            var builder = new DbContextOptionsBuilder<PgSQLContext>();
+            builder.UseNpgsql(connection);
 
-            services.AddScoped<ICartRepository, CartRepository>();
-            services.AddScoped<ICouponRepository, CouponRepository>();
-
+            services.AddSingleton(new OrderRepository(builder.Options));
+            services.AddHostedService<RabbitMQCheckoutConsumer>();
+            services.AddHostedService<RabbitMQPaymentCosumer>();
             services.AddSingleton<IRabbitMQMessageSender, RabbitMQMessageSender>();
 
-            services.AddControllers();
+            // Erro de DateTime PostgreSQL
+            AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
-            services.AddHttpClient<ICouponRepository, CouponRepository>(s => s.BaseAddress = 
-                new Uri(Configuration["ServiceUrls:CouponAPI"]));
+            services.AddControllers();
 
             services.AddAuthentication("Bearer")
                 .AddJwtBearer("Bearer", options =>
@@ -62,7 +62,6 @@ namespace GeekShopping.CartAPI
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "GeekShopping.CartAPI", Version = "v1" });
-                c.EnableAnnotations();
                 c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme()
                 {
                     Description = @"Enter 'Bearer' [space] and your token!",
@@ -92,20 +91,26 @@ namespace GeekShopping.CartAPI
             });
         }
 
-        public void Configure(WebApplication app, IWebHostEnvironment environment)
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(WebApplication app, IWebHostEnvironment env)
         {
-            if (app.Environment.IsDevelopment())
+            if (env.IsDevelopment())
             {
+                app.UseDeveloperExceptionPage();
                 app.UseSwagger();
-                app.UseSwaggerUI();
+                app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "GeekShopping.OrderAPI v1"));
             }
 
             app.UseHttpsRedirection();
 
+            app.UseRouting();
             app.UseAuthentication();
             app.UseAuthorization();
 
-            app.MapControllers();
+            app.UseEndpoints(endpoints =>
+            {
+                endpoints.MapControllers();
+            });
         }
     }
 
